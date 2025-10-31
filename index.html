@@ -1345,9 +1345,9 @@
 		<i data-lucide="clock"></i>
 	</button>
 
-	<script>
-		// --- ENHANCED DATA STORE ---
-		const rawData = `Monday
+        <script>
+                // --- ENHANCED DATA STORE ---
+                const rawData = `Monday
 		Class,Period 1<br>8:30 AM - 9:10 AM,Period 2<br>9:10 AM - 9:50 AM,Period 3<br>9:50 AM - 10:30 AM,Period 4<br>10:30 AM - 11:10 AM,Period 5<br>11:30 AM - 12:10 PM,Period 6<br>12:10 PM - 12:50 PM,Period 7<br>12:50 PM - 01:30 PM,Period 8<br>01:30 PM - 02:10 PM
 		Class 1,EVS (Bindu),EVS (Bindu),ELGA (Bindu),ELGA (Bindu),ELGA (Bindu),Hindi (Bindu),Home Work (Anjana),Maths (Kusum)
 		Class 2,Maths (Anita),Maths (Anita),ELGA (Leena),ELGA (Leena),ELGA (Leena),EVS (Rashmita),Hindi (Bindu),Hindi (Bindu)
@@ -1461,22 +1461,147 @@
 		Class 12 Commerce,Accountancy (Nathulal),Accountancy (Nathulal),Economics (Prakash),Business (Pradhyuman),Sports (Rakesh),Accountancy (Nathulal),Hindi (Jainendra),English (Pradhyuman)
 		Class 12 Arts,Geography (Prakash),English Literature (Harshita),Economics/Political Science (Prakash/Pradhyuman),English Literature (Harshita),Sports (Rakesh),Sports (Rakesh),Hindi (Jainendra),English (Pradhyuman)`;
 
-		// --- ENHANCED GLOBAL STATE ---
-		let state = {
-			currentView: 'Dashboard',
-			substitutions: {},
-			allData: {},
-			cache: new Map(),
-			lastUpdate: null,
-			performance: {
-				renderTimes: [],
-				avgRenderTime: 0
-			}
-		};
+                const VALID_VIEWS = new Set(['Dashboard', 'Day', 'Substitution', 'Class', 'Teacher']);
 
-		const mainContent = document.getElementById('main-content');
+                const STORAGE_KEYS = Object.freeze({
+                        substitutions: 'vpps-timetable-substitutions',
+                        view: 'vpps-timetable-current-view',
+                        timestamp: 'vpps-timetable-last-update'
+                });
 
-		// --- UTILITY FUNCTIONS ---
+                const PERIOD_SCHEDULE = Object.freeze([
+                        { name: 'Period 1', start: 9 * 60 + 0, end: 9 * 60 + 40, label: '9:00 AM - 9:40 AM' },
+                        { name: 'Period 2', start: 9 * 60 + 40, end: 10 * 60 + 20, label: '9:40 AM - 10:20 AM' },
+                        { name: 'Period 3', start: 10 * 60 + 20, end: 11 * 60 + 0, label: '10:20 AM - 11:00 AM' },
+                        { name: 'Period 4', start: 11 * 60 + 0, end: 11 * 60 + 40, label: '11:00 AM - 11:40 AM' },
+                        { name: 'Period 5', start: 12 * 60 + 0, end: 12 * 60 + 40, label: '12:00 PM - 12:40 PM' },
+                        { name: 'Period 6', start: 12 * 60 + 40, end: 13 * 60 + 20, label: '12:40 PM - 1:20 PM' },
+                        { name: 'Period 7', start: 13 * 60 + 20, end: 13 * 60 + 55, label: '1:20 PM - 1:55 PM' },
+                        { name: 'Period 8', start: 13 * 60 + 55, end: 14 * 60 + 35, label: '1:55 PM - 2:35 PM' }
+                ]);
+
+                // --- ENHANCED GLOBAL STATE ---
+                let state = {
+                        currentView: 'Dashboard',
+                        substitutions: {},
+                        allData: {},
+                        cache: new Map(),
+                        lastUpdate: null,
+                        performance: {
+                                renderTimes: [],
+                                avgRenderTime: 0
+                        }
+                };
+
+                // --- STATE PERSISTENCE HELPERS ---
+                function persistCurrentView(view) {
+                        if (typeof localStorage === 'undefined') return;
+                        try {
+                                if (VALID_VIEWS.has(view)) {
+                                        localStorage.setItem(STORAGE_KEYS.view, view);
+                                }
+                        } catch (error) {
+                                console.error('Failed to persist current view:', error);
+                        }
+                }
+
+                function loadPersistedView() {
+                        if (typeof localStorage === 'undefined') return null;
+                        try {
+                                const stored = localStorage.getItem(STORAGE_KEYS.view);
+                                return stored && VALID_VIEWS.has(stored) ? stored : null;
+                        } catch (error) {
+                                console.error('Failed to load persisted view:', error);
+                                return null;
+                        }
+                }
+
+                function hasSubstitutionEntries(info) {
+                        if (!info) return false;
+                        const hasAbsent = Array.isArray(info.absentTeachers) && info.absentTeachers.length > 0;
+                        const plan = info.plan || {};
+                        const hasPlan = Object.values(plan).some(periodMap => periodMap && Object.keys(periodMap).length > 0);
+                        return hasAbsent || hasPlan;
+                }
+
+                function persistSubstitutions() {
+                        if (typeof localStorage === 'undefined') return;
+                        try {
+                                if (!state.allData?.days) return;
+
+                                const payload = {};
+                                state.allData.days.forEach(day => {
+                                        const info = state.substitutions?.[day];
+                                        if (hasSubstitutionEntries(info)) {
+                                                payload[day] = {
+                                                        plan: info.plan || {},
+                                                        absentTeachers: Array.isArray(info.absentTeachers) ? info.absentTeachers : []
+                                                };
+                                        }
+                                });
+
+                                if (Object.keys(payload).length > 0) {
+                                        localStorage.setItem(STORAGE_KEYS.substitutions, JSON.stringify(payload));
+                                        const timestamp = new Date().toISOString();
+                                        localStorage.setItem(STORAGE_KEYS.timestamp, timestamp);
+                                        state.lastUpdate = timestamp;
+                                } else {
+                                        localStorage.removeItem(STORAGE_KEYS.substitutions);
+                                        localStorage.removeItem(STORAGE_KEYS.timestamp);
+                                        state.lastUpdate = null;
+                                }
+                        } catch (error) {
+                                console.error('Failed to persist substitutions:', error);
+                        }
+                }
+
+                function hydrateSubstitutionsFromStorage() {
+                        if (typeof localStorage === 'undefined') return;
+                        try {
+                                const raw = localStorage.getItem(STORAGE_KEYS.substitutions);
+                                if (!raw) return;
+
+                                const parsed = JSON.parse(raw);
+                                if (!state.allData?.days) return;
+
+                                state.allData.days.forEach(day => {
+                                        if (!state.substitutions[day]) {
+                                                state.substitutions[day] = { plan: {}, absentTeachers: [] };
+                                        }
+                                        const saved = parsed?.[day];
+                                        if (saved) {
+                                                state.substitutions[day].plan = saved.plan || {};
+                                                state.substitutions[day].absentTeachers = Array.isArray(saved.absentTeachers) ? saved.absentTeachers : [];
+                                        }
+                                });
+
+                                const timestamp = localStorage.getItem(STORAGE_KEYS.timestamp);
+                                if (timestamp) {
+                                        state.lastUpdate = timestamp;
+                                }
+                        } catch (error) {
+                                console.error('Failed to hydrate substitutions from storage:', error);
+                        }
+                }
+
+                function formatTimestampForDisplay(isoString) {
+                        if (!isoString) return null;
+                        try {
+                                const date = new Date(isoString);
+                                if (Number.isNaN(date.getTime())) return null;
+                                return new Intl.DateTimeFormat('en-IN', {
+                                        dateStyle: 'medium',
+                                        timeStyle: 'short'
+                                }).format(date);
+                        } catch (error) {
+                                console.error('Failed to format timestamp:', error);
+                                return null;
+                        }
+                }
+
+                const mainContent = document.getElementById('main-content');
+
+                // --- UTILITY FUNCTIONS ---
 		function showToast(message, duration = 3000, type = 'info') {
 			try {
 				// Remove existing toast
@@ -1522,7 +1647,22 @@
 			window.scrollTo({ top: 0, behavior: 'smooth' });
 		}
 
-		function isMobile() { return window.innerWidth <= 768; }
+                function isMobile() { return window.innerWidth <= 768; }
+
+                function minutesSinceMidnight(date = new Date()) {
+                        return date.getHours() * 60 + date.getMinutes();
+                }
+
+                function getSelectedSubstitutionDay() {
+                        const select = document.getElementById('substitution-day-select');
+                        return select?.value || getCurrentDay();
+                }
+
+                function getSelectedAbsentTeachers() {
+                        const container = document.getElementById('absent-teacher-list');
+                        if (!container) return [];
+                        return Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
+                }
 
 		function scrollToCurrentPeriodRow(containerSelector = '#main-content') {
 			try {
@@ -1642,81 +1782,44 @@
 			return 'Monday';
 		}
 
-		function getCurrentPeriod() {
-			const now = new Date();
-			const hour = now.getHours();
-			const minute = now.getMinutes();
-			const timeInMinutes = hour * 60 + minute;
+                function getCurrentPeriod() {
+                        if (!PERIOD_SCHEDULE.length) return 0;
+                        const timeInMinutes = minutesSinceMidnight();
 
-			// Winter School time periods in minutes from midnight
-			// Recess: 11:40 AM - 12:00 PM (between Period 4 and 5)
-			const periods = [
-				{ start: 9 * 60 + 0, end: 9 * 60 + 40 },     // 9:00-9:40
-				{ start: 9 * 60 + 40, end: 10 * 60 + 20 },    // 9:40-10:20
-				{ start: 10 * 60 + 20, end: 11 * 60 + 0 },    // 10:20-11:00
-				{ start: 11 * 60 + 0, end: 11 * 60 + 40 },    // 11:00-11:40
-				{ start: 12 * 60 + 0, end: 12 * 60 + 40 },    // 12:00-12:40
-				{ start: 12 * 60 + 40, end: 13 * 60 + 20 },   // 12:40-1:20
-				{ start: 13 * 60 + 20, end: 13 * 60 + 55 },   // 1:20-1:55
-				{ start: 13 * 60 + 55, end: 14 * 60 + 35 }    // 1:55-2:35
-			];
+                        for (let i = 0; i < PERIOD_SCHEDULE.length; i++) {
+                                const period = PERIOD_SCHEDULE[i];
+                                if (timeInMinutes >= period.start && timeInMinutes <= period.end) {
+                                        return i + 1;
+                                }
+                        }
 
-			for (let i = 0; i < periods.length; i++) {
-				if (timeInMinutes >= periods[i].start && timeInMinutes <= periods[i].end) {
-					return i + 1;
-				}
-			}
+                        if (timeInMinutes < PERIOD_SCHEDULE[0].start) return 1;
+                        return PERIOD_SCHEDULE.length;
+                }
 
-			// If outside school hours, return appropriate period
-			if (timeInMinutes < periods[0].start) return 1;
-			return Math.min(8, periods.length);
-		}
+                // Returns the zero-based index of the CURRENTLY ACTIVE period, or -1 if none
+                function getActivePeriodIndex() {
+                        if (!PERIOD_SCHEDULE.length) return -1;
+                        const timeInMinutes = minutesSinceMidnight();
 
-		// Returns the zero-based index of the CURRENTLY ACTIVE period, or -1 if none
-		function getActivePeriodIndex() {
-			const now = new Date();
-			const hour = now.getHours();
-			const minute = now.getMinutes();
-			const timeInMinutes = hour * 60 + minute;
-
-			// Winter timings; half-open intervals [start, end)
-			const periods = [
-				{ start: 9 * 60 + 0, end: 9 * 60 + 40 },     // 9:00-9:40
-				{ start: 9 * 60 + 40, end: 10 * 60 + 20 },    // 9:40-10:20
-				{ start: 10 * 60 + 20, end: 11 * 60 + 0 },    // 10:20-11:00
-				{ start: 11 * 60 + 0, end: 11 * 60 + 40 },    // 11:00-11:40
-				{ start: 12 * 60 + 0, end: 12 * 60 + 40 },    // 12:00-12:40
-				{ start: 12 * 60 + 40, end: 13 * 60 + 20 },   // 12:40-1:20
-				{ start: 13 * 60 + 20, end: 13 * 60 + 55 },   // 1:20-1:55
-				{ start: 13 * 60 + 55, end: 14 * 60 + 35 }    // 1:55-2:35
-			];
-
-			for (let i = 0; i < periods.length; i++) {
-				// Use half-open interval [start, end) to avoid double-highlighting at exact boundaries
-				if (timeInMinutes >= periods[i].start && timeInMinutes < periods[i].end) {
-					return i;
-				}
-			}
+                        for (let i = 0; i < PERIOD_SCHEDULE.length; i++) {
+                                const period = PERIOD_SCHEDULE[i];
+                                if (timeInMinutes >= period.start && timeInMinutes < period.end) {
+                                        return i;
+                                }
+                        }
 			return -1; // Before first, after last, or break
 		}
 
 		// --- WINTER SCHEDULE HELPERS ---
-		function applyWinterPeriodTimings() {
-			// Override parsed period headers to winter timing, keep period names stable
-			const winterHeaders = [
-				{ name: 'Period 1', time: '9:00 AM - 9:40 AM' },
-				{ name: 'Period 2', time: '9:40 AM - 10:20 AM' },
-				{ name: 'Period 3', time: '10:20 AM - 11:00 AM' },
-				{ name: 'Period 4', time: '11:00 AM - 11:40 AM' },
-				{ name: 'Period 5', time: '12:00 PM - 12:40 PM' }, // Recess 11:40-12:00
-				{ name: 'Period 6', time: '12:40 PM - 1:20 PM' },
-				{ name: 'Period 7', time: '1:20 PM - 1:55 PM' },
-				{ name: 'Period 8', time: '1:55 PM - 2:35 PM' }
-			];
-			if (state.allData) {
-				state.allData.periodHeaders = winterHeaders;
-			}
-		}
+                function applyWinterPeriodTimings() {
+                        if (state.allData) {
+                                state.allData.periodHeaders = PERIOD_SCHEDULE.map(period => ({
+                                        name: period.name,
+                                        time: period.label
+                                }));
+                        }
+                }
 
 		function findBestFreeTeacher(day, periodIndex, currentDaySubs, vacantPeriod) {
 			const candidates = findFreeTeachers(day, periodIndex, [], currentDaySubs, vacantPeriod);
@@ -3595,178 +3698,226 @@
 		}
 
 		// --- FIX SUBSTITUTION VIEW ---
-		function renderSubstitutionView(day = null, absentTeachers = []) {
-			const { teacherNames, periodHeaders, teacherDetails, timetable, days } = state.allData;
-			// Always default to the current day when none is provided
-			const currentDay = getCurrentDay();
-			const selectedDay = day || currentDay;
-			document.getElementById('print-header-subtitle').textContent = `Substitution Plan for ${selectedDay}`;
+                function renderSubstitutionView(day = null, absentTeachers = null) {
+                        const { teacherNames, periodHeaders, teacherDetails, days } = state.allData;
+                        const currentDay = getCurrentDay();
+                        const selectedDay = day || currentDay;
 
+                        if (!state.substitutions[selectedDay]) {
+                                state.substitutions[selectedDay] = { plan: {}, absentTeachers: [] };
+                        }
 
-			const teacherOptionsHtml = teacherNames.map(t => `
-				<label style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem;
-							  border-radius: var(--radius); cursor: pointer; transition: background 0.2s;">
-					<input type="checkbox" value="${t}" ${absentTeachers.includes(t) ? 'checked' : ''}
-						   onchange="handleAbsentTeacherChange(this)">
-					<span>${t}</span>
-				</label>
-			`).join('');
+                        const savedAbsentees = state.substitutions[selectedDay].absentTeachers || [];
+                        const activeAbsentTeachers = Array.isArray(absentTeachers) ? absentTeachers : [...savedAbsentees];
 
-			const daySubsData = state.substitutions[selectedDay]?.plan || {};
-			const vacantSlots = [];
-			absentTeachers.forEach(absentTeacher => {
-				const schedule = teacherDetails[absentTeacher]?.schedule[selectedDay];
-				if (schedule) {
-					schedule.forEach((period, periodIndex) => {
-						if (period) {
-							vacantSlots.push({ ...period, periodIndex, originalTeacher: absentTeacher });
-						}
-					});
-				}
-			});
+                        state.substitutions[selectedDay].absentTeachers = [...activeAbsentTeachers];
 
-			const plan = vacantSlots.map(slot => {
-				const substitute = daySubsData[slot.className]?.[slot.periodIndex];
-				return { ...slot, substitute };
-			}).sort((a, b) => a.periodIndex - b.periodIndex);
+                        document.getElementById('print-header-subtitle').textContent = `Substitution Plan for ${selectedDay}`;
 
+                        const dayOptions = days.map(d => `<option value="${d}" ${d === selectedDay ? 'selected' : ''}>${d}</option>`).join('');
+                        const lastSavedDisplay = formatTimestampForDisplay(state.lastUpdate);
 
-	let planTableHTML = '';
-	if (plan.length > 0) {
-		const tableRows = plan.map(slot => `
-			<tr>
-				<td>${periodHeaders[slot.periodIndex].name}</td>
-				<td>${slot.className}</td>
-				<td>${slot.subject}</td>
-				<td style="color: var(--red-600);">${slot.originalTeacher}</td>
-				<td><span class="substitute">${slot.substitute || '--'}</span></td>
-			</tr>
-		`).join('');
+                        const teacherOptionsHtml = teacherNames.map(t => `
+                                <label style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem;
+                                                          border-radius: var(--radius); cursor: pointer; transition: background 0.2s;">
+                                        <input type="checkbox" value="${t}" ${activeAbsentTeachers.includes(t) ? 'checked' : ''}
+                                                   onchange="handleAbsentTeacherChange()">
+                                        <span>${t}</span>
+                                </label>
+                        `).join('');
 
-		planTableHTML = `
-			<div style="margin-top: 2rem;">
-				<div id="substitution-plan-content">
-					<h3 style="text-align: center; margin-bottom: 1rem; font-size: 1.25rem;">
-						📋 Substitution Plan: ${selectedDay}
-					</h3>
-					<div class="table-container">
-						<table>
-							<thead>
-								<tr>
-									<th>Period</th>
-									<th>Class</th>
-									<th>Subject</th>
-									<th>Original Teacher</th>
-									<th>Substitute</th>
-								</tr>
-							</thead>
-							<tbody>${tableRows}</tbody>
-						</table>
-					</div>
-					<div class="flex justify-center gap-4" style="margin-top: 1.5rem; flex-wrap: wrap;">
-						<button onclick="handleShareSubstitutionPlan('${selectedDay}')" class="button button-whatsapp" style="max-width: 250px;">
-							<i data-lucide="share-2"></i> Share Substitution Plan (Image)
-						</button>
-						<button onclick="handleShareSubstitutionPlanText('${selectedDay}')" class="button button-secondary" style="max-width: 250px;">
-							<i data-lucide="clipboard"></i> Copy Text Plan
-						</button>
-						<button onclick="handlePrintSubstitutionPlan('${selectedDay}')" class="button button-secondary" style="max-width: 250px;">
-							<i data-lucide="printer"></i> Print Plan
-						</button>
-					</div>
-				</div>
-			</div>
-		`;
-	}
+                        const daySubsData = state.substitutions[selectedDay]?.plan || {};
+                        const vacantSlots = [];
+                        activeAbsentTeachers.forEach(absentTeacher => {
+                                const schedule = teacherDetails[absentTeacher]?.schedule[selectedDay];
+                                if (schedule) {
+                                        schedule.forEach((period, periodIndex) => {
+                                                if (period) {
+                                                        vacantSlots.push({ ...period, periodIndex, originalTeacher: absentTeacher });
+                                                }
+                                        });
+                                }
+                        });
 
-			const html = `
-				<div class="card">
-					<div class="grid grid-cols-1 gap-6">
-						<div>
-							<label class="block font-bold mb-2">Select Absent Teachers (for ${selectedDay})</label>
-							<div style="border: 1px solid var(--gray-300); border-radius: var(--radius);
-									padding: 0.5rem; max-height: 15rem; overflow-y: auto;">
-								${teacherOptionsHtml}
-							</div>
-						</div>
-					</div>
-					<div class="grid grid-cols-1 grid-cols-md-2 gap-4"
-						 style="border-top: 1px solid var(--gray-200); padding-top: 1.5rem; margin-top: 1.5rem;">
-						<button id="generate-plan-btn" class="button button-primary">
-							<i data-lucide="wand-2"></i> Generate Smart Plan
-						</button>
-						<button id="reset-plan-btn" class="button button-danger">
-							<i data-lucide="rotate-ccw"></i> Reset ${selectedDay} Plan
-						</button>
-					</div>
-					<div id="plan-container">${planTableHTML}</div>
-					<div class="flex justify-center gap-4" style="margin-top: 1.5rem;">
-						<button onclick="handlePrint()" class="button button-secondary" style="max-width: 200px;">
-							<i data-lucide="printer"></i> Print Full Timetable
-						</button>
-					</div>
-				</div>
-			`;
+                        const plan = vacantSlots.map(slot => {
+                                const substitute = daySubsData[slot.className]?.[slot.periodIndex];
+                                return { ...slot, substitute };
+                        }).sort((a, b) => a.periodIndex - b.periodIndex);
 
-			mainContent.innerHTML = html;
-			attachSubstitutionEventListeners(selectedDay, absentTeachers);
-			lucide.createIcons();
-		}
+                        let planTableHTML = '';
+                        if (plan.length > 0) {
+                                const tableRows = plan.map(slot => {
+                                        const header = periodHeaders[slot.periodIndex] || { name: `Period ${slot.periodIndex + 1}` };
+                                        return `
+                                                <tr>
+                                                        <td>${header.name}</td>
+                                                        <td>${slot.className}</td>
+                                                        <td>${slot.subject}</td>
+                                                        <td style="color: var(--red-600);">${slot.originalTeacher}</td>
+                                                        <td><span class="substitute">${slot.substitute || '--'}</span></td>
+                                                </tr>
+                                        `;
+                                }).join('');
 
-		// --- EVENT HANDLERS & LOGIC ---
-		function attachSubstitutionEventListeners(day, absentTeachers) {
-			try {
-				const generateBtn = document.getElementById('generate-plan-btn');
-				const resetBtn = document.getElementById('reset-plan-btn');
-				
-				if (generateBtn) {
-					generateBtn.addEventListener('click', () => {
-						try {
-							handleGeneratePlan(day, absentTeachers);
-						} catch (error) {
-							console.error('Error in generate plan button:', error);
-							showToast('❌ Error generating plan', 3000, 'error');
-						}
-					});
-				}
-				
-				if (resetBtn) {
-					resetBtn.addEventListener('click', () => {
-						try {
-							handleResetPlan(day);
-						} catch (error) {
-							console.error('Error in reset plan button:', error);
-							showToast('❌ Error resetting plan', 3000, 'error');
-						}
-					});
-				}
-			} catch (error) {
-				console.error('Error attaching substitution event listeners:', error);
-			}
-		}
-		function handleAbsentTeacherChange(checkbox) {
-			try {
-				const day = getCurrentDay();
-				const selectedCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"]:checked'));
-				const absentTeachers = selectedCheckboxes.map(cb => cb.value);
-				renderSubstitutionView(day, absentTeachers);
-			} catch (error) {
-				console.error('Error handling absent teacher change:', error);
-				showToast('❌ Error updating teacher selection', 3000, 'error');
-			}
-		}
+                                planTableHTML = `
+                                        <div style="margin-top: 2rem;">
+                                                <div id="substitution-plan-content">
+                                                        <h3 style="text-align: center; margin-bottom: 1rem; font-size: 1.25rem;">
+                                                                📋 Substitution Plan: ${selectedDay}
+                                                        </h3>
+                                                        <div class="table-container">
+                                                                <table>
+                                                                        <thead>
+                                                                                <tr>
+                                                                                        <th>Period</th>
+                                                                                        <th>Class</th>
+                                                                                        <th>Subject</th>
+                                                                                        <th>Original Teacher</th>
+                                                                                        <th>Substitute</th>
+                                                                                </tr>
+                                                                        </thead>
+                                                                        <tbody>${tableRows}</tbody>
+                                                                </table>
+                                                        </div>
+                                                        <div class="flex justify-center gap-4" style="margin-top: 1.5rem; flex-wrap: wrap;">
+                                                                <button onclick="handleShareSubstitutionPlan('${selectedDay}')" class="button button-whatsapp" style="max-width: 250px;">
+                                                                        <i data-lucide="share-2"></i> Share Substitution Plan (Image)
+                                                                </button>
+                                                                <button onclick="handleShareSubstitutionPlanText('${selectedDay}')" class="button button-secondary" style="max-width: 250px;">
+                                                                        <i data-lucide="clipboard"></i> Copy Text Plan
+                                                                </button>
+                                                                <button onclick="handlePrintSubstitutionPlan('${selectedDay}')" class="button button-secondary" style="max-width: 250px;">
+                                                                        <i data-lucide="printer"></i> Print Plan
+                                                                </button>
+                                                        </div>
+                                                </div>
+                                        </div>
+                                `;
+                        }
+
+                        const lastSavedHtml = lastSavedDisplay
+                                ? `<p style="margin-top: 1rem; color: var(--gray-500); font-size: 0.85rem; text-align: center;">Last saved ${lastSavedDisplay}</p>`
+                                : '';
+
+                        const html = `
+                                <div class="card">
+                                        <div class="grid grid-cols-1 gap-6">
+                                                <div>
+                                                        <label class="block font-bold mb-2" for="substitution-day-select">Plan for Day</label>
+                                                        <select id="substitution-day-select">${dayOptions}</select>
+                                                </div>
+                                                <div>
+                                                        <label class="block font-bold mb-2">Select Absent Teachers (for ${selectedDay})</label>
+                                                        <div id="absent-teacher-list" style="border: 1px solid var(--gray-300); border-radius: var(--radius);
+                                                                        padding: 0.5rem; max-height: 15rem; overflow-y: auto;">
+                                                                ${teacherOptionsHtml}
+                                                        </div>
+                                                </div>
+                                        </div>
+                                        <div class="grid grid-cols-1 grid-cols-md-2 gap-4"
+                                                 style="border-top: 1px solid var(--gray-200); padding-top: 1.5rem; margin-top: 1.5rem;">
+                                                <button id="generate-plan-btn" class="button button-primary">
+                                                        <i data-lucide="wand-2"></i> Generate Smart Plan
+                                                </button>
+                                                <button id="reset-plan-btn" class="button button-danger">
+                                                        <i data-lucide="rotate-ccw"></i> Reset ${selectedDay} Plan
+                                                </button>
+                                        </div>
+                                        <div id="plan-container">${planTableHTML}</div>
+                                        ${lastSavedHtml}
+                                        <div class="flex justify-center gap-4" style="margin-top: 1.5rem;">
+                                                <button onclick="handlePrint()" class="button button-secondary" style="max-width: 200px;">
+                                                        <i data-lucide="printer"></i> Print Full Timetable
+                                                </button>
+                                        </div>
+                                </div>
+                        `;
+
+                        mainContent.innerHTML = html;
+                        attachSubstitutionEventListeners(selectedDay);
+                        lucide.createIcons();
+                }
+
+                // --- EVENT HANDLERS & LOGIC ---
+                function attachSubstitutionEventListeners(day) {
+                        try {
+                                const generateBtn = document.getElementById('generate-plan-btn');
+                                const resetBtn = document.getElementById('reset-plan-btn');
+                                const daySelect = document.getElementById('substitution-day-select');
+
+                                if (daySelect) {
+                                        daySelect.addEventListener('change', (event) => {
+                                                try {
+                                                        const newDay = event.target.value;
+                                                        const saved = state.substitutions[newDay]?.absentTeachers || [];
+                                                        renderSubstitutionView(newDay, saved);
+                                                } catch (error) {
+                                                        console.error('Error handling day change:', error);
+                                                        showToast('❌ Error changing day', 3000, 'error');
+                                                }
+                                        });
+                                }
+
+                                if (generateBtn) {
+                                        generateBtn.addEventListener('click', () => {
+                                                try {
+                                                        const activeDay = getSelectedSubstitutionDay();
+                                                        const activeAbsentTeachers = getSelectedAbsentTeachers();
+                                                        handleGeneratePlan(activeDay, activeAbsentTeachers);
+                                                } catch (error) {
+                                                        console.error('Error in generate plan button:', error);
+                                                        showToast('❌ Error generating plan', 3000, 'error');
+                                                }
+                                        });
+                                }
+
+                                if (resetBtn) {
+                                        resetBtn.addEventListener('click', () => {
+                                                try {
+                                                        const activeDay = getSelectedSubstitutionDay();
+                                                        handleResetPlan(activeDay);
+                                                } catch (error) {
+                                                        console.error('Error in reset plan button:', error);
+                                                        showToast('❌ Error resetting plan', 3000, 'error');
+                                                }
+                                        });
+                                }
+                        } catch (error) {
+                                console.error('Error attaching substitution event listeners:', error);
+                        }
+                }
+                function handleAbsentTeacherChange() {
+                        try {
+                                const day = getSelectedSubstitutionDay();
+                                const absentTeachers = getSelectedAbsentTeachers();
+                                if (!state.substitutions[day]) {
+                                        state.substitutions[day] = { plan: {}, absentTeachers: [] };
+                                }
+                                state.substitutions[day].absentTeachers = [...absentTeachers];
+                                persistSubstitutions();
+                                renderSubstitutionView(day, absentTeachers);
+                        } catch (error) {
+                                console.error('Error handling absent teacher change:', error);
+                                showToast('❌ Error updating teacher selection', 3000, 'error');
+                        }
+                }
 
 		// --- VIEW SWITCHING ---
-		function switchView(view) {
-			// Clear intervals
-			if (window.dashboardInterval) {
-				clearInterval(window.dashboardInterval);
-				window.dashboardInterval = null;
-			}
-			
+                function switchView(view) {
+                        if (!VALID_VIEWS.has(view)) {
+                                view = 'Dashboard';
+                        }
+
+                        // Clear intervals
+                        if (window.dashboardInterval) {
+                                clearInterval(window.dashboardInterval);
+                                window.dashboardInterval = null;
+                        }
+
 			// Swipe handlers cleanup removed
 
-			state.currentView = view;
+                        state.currentView = view;
+                        persistCurrentView(view);
 			
 			// Update navigation
 			document.querySelectorAll('.nav-button').forEach(btn => btn.classList.remove('active'));
@@ -3799,106 +3950,104 @@
 		}
 
 		// --- SUBSTITUTION MANAGEMENT ---
-		function handleGeneratePlan(day, absentTeachers) {
-			try {
-				if (!day || !absentTeachers || absentTeachers.length === 0) {
-					showToast('⚠️ Please select at least one absent teacher', 3000, 'warning');
-					return;
-				}
+                function handleGeneratePlan(day, absentTeachers) {
+                        try {
+                                const activeDay = day || getSelectedSubstitutionDay();
+                                const activeAbsentTeachers = Array.isArray(absentTeachers) ? absentTeachers : getSelectedAbsentTeachers();
 
-				const { teacherDetails, timetable } = state.allData;
-				const vacantSlots = [];
+                                if (!activeDay || !activeAbsentTeachers || activeAbsentTeachers.length === 0) {
+                                        showToast('⚠️ Please select at least one absent teacher', 3000, 'warning');
+                                        return;
+                                }
 
-				// Find all slots that need substitution
-				absentTeachers.forEach(teacher => {
-					const schedule = teacherDetails[teacher]?.schedule[day];
-					if (schedule) {
-						schedule.forEach((period, periodIndex) => {
-							if (period) {
-								vacantSlots.push({
-									...period,
-									periodIndex,
-									originalTeacher: teacher
-								});
-							}
-						});
-					}
-				});
+                                const { teacherDetails } = state.allData;
+                                const vacantSlots = [];
 
-				// Initialize substitution structure if needed
-				if (!state.substitutions[day]) {
-					state.substitutions[day] = { plan: {}, absentTeachers: [] };
-				}
-				state.substitutions[day].absentTeachers = [...absentTeachers];
-				
-				// Clear existing plan for these slots
-				vacantSlots.forEach(slot => {
-					if (!state.substitutions[day].plan[slot.className]) {
-						state.substitutions[day].plan[slot.className] = {};
-					}
-					delete state.substitutions[day].plan[slot.className][slot.periodIndex];
-				});
+                                activeAbsentTeachers.forEach(teacher => {
+                                        const schedule = teacherDetails[teacher]?.schedule[activeDay];
+                                        if (schedule) {
+                                                schedule.forEach((period, periodIndex) => {
+                                                        if (period) {
+                                                                vacantSlots.push({
+                                                                        ...period,
+                                                                        periodIndex,
+                                                                        originalTeacher: teacher
+                                                                });
+                                                        }
+                                                });
+                                        }
+                                });
 
-				// Generate new plan with enhanced algorithm
-				const newPlan = state.substitutions[day].plan;
-				vacantSlots.forEach(slot => {
-					const freeTeachers = findFreeTeachers(
-						day, 
-						slot.periodIndex, 
-						absentTeachers, 
-						newPlan,
-						slot // Pass the vacant period details for better matching
-					);
-					
-					if (freeTeachers.length > 0) {
-						if (!newPlan[slot.className]) {
-							newPlan[slot.className] = {};
-						}
-						// Use the highest-scored teacher (first in sorted array)
-						newPlan[slot.className][slot.periodIndex] = freeTeachers[0].teacher;
-						
-						// Log the recommendation for debugging
-						console.log(`Assigned ${freeTeachers[0].teacher} to ${slot.className} Period ${slot.periodIndex + 1} (Score: ${freeTeachers[0].score}, Reason: ${freeTeachers[0].reason})`);
-					}
-				});
+                                if (!state.substitutions[activeDay]) {
+                                        state.substitutions[activeDay] = { plan: {}, absentTeachers: [] };
+                                }
+                                state.substitutions[activeDay].absentTeachers = [...activeAbsentTeachers];
 
-				// Save updated plan
-				state.substitutions[day].plan = newPlan;
-				showToast('✅ Substitution plan generated successfully!', 3000, 'success');
-				renderSubstitutionView(day, absentTeachers);
-				
-			} catch (error) {
-				console.error('Error generating substitution plan:', error);
-				showToast('❌ Failed to generate substitution plan', 3000, 'error');
-			}
-		}
+                                vacantSlots.forEach(slot => {
+                                        if (!state.substitutions[activeDay].plan[slot.className]) {
+                                                state.substitutions[activeDay].plan[slot.className] = {};
+                                        }
+                                        delete state.substitutions[activeDay].plan[slot.className][slot.periodIndex];
+                                });
 
-		function handleResetPlan(day) {
-			try {
-				if (!day) {
-					showToast('⚠️ No day selected', 3000, 'warning');
-					return;
-				}
+                                const newPlan = state.substitutions[activeDay].plan;
+                                vacantSlots.forEach(slot => {
+                                        const freeTeachers = findFreeTeachers(
+                                                activeDay,
+                                                slot.periodIndex,
+                                                activeAbsentTeachers,
+                                                newPlan,
+                                                slot
+                                        );
 
-				if (!state.substitutions[day] || !state.substitutions[day].plan) {
-					showToast('ℹ️ No substitution plan exists for this day', 3000, 'info');
-					return;
-				}
+                                        if (freeTeachers.length > 0) {
+                                                if (!newPlan[slot.className]) {
+                                                        newPlan[slot.className] = {};
+                                                }
+                                                newPlan[slot.className][slot.periodIndex] = freeTeachers[0].teacher;
+                                                console.log(`Assigned ${freeTeachers[0].teacher} to ${slot.className} Period ${slot.periodIndex + 1} (Score: ${freeTeachers[0].score}, Reason: ${freeTeachers[0].reason})`);
+                                        }
+                                });
 
-				const confirmReset = confirm(`Are you sure you want to reset the substitution plan for ${day}?`);
-				if (!confirmReset) return;
+                                state.substitutions[activeDay].plan = newPlan;
+                                persistSubstitutions();
+                                showToast('✅ Substitution plan generated successfully!', 3000, 'success');
+                                renderSubstitutionView(activeDay, activeAbsentTeachers);
 
-				const absentTeachers = state.substitutions[day].absentTeachers || [];
-				state.substitutions[day] = { plan: {}, absentTeachers };
-				
-				showToast('✅ Substitution plan reset successfully', 3000, 'success');
-				renderSubstitutionView(day, absentTeachers);
-				
-			} catch (error) {
-				console.error('Error resetting substitution plan:', error);
-				showToast('❌ Failed to reset substitution plan', 3000, 'error');
-			}
-		}
+                        } catch (error) {
+                                console.error('Error generating substitution plan:', error);
+                                showToast('❌ Failed to generate substitution plan', 3000, 'error');
+                        }
+                }
+
+                function handleResetPlan(day) {
+                        try {
+                                const activeDay = day || getSelectedSubstitutionDay();
+                                if (!activeDay) {
+                                        showToast('⚠️ No day selected', 3000, 'warning');
+                                        return;
+                                }
+
+                                if (!state.substitutions[activeDay] || !state.substitutions[activeDay].plan) {
+                                        showToast('ℹ️ No substitution plan exists for this day', 3000, 'info');
+                                        return;
+                                }
+
+                                const confirmReset = confirm(`Are you sure you want to reset the substitution plan for ${activeDay}?`);
+                                if (!confirmReset) return;
+
+                                const absentTeachers = state.substitutions[activeDay].absentTeachers || [];
+                                state.substitutions[activeDay] = { plan: {}, absentTeachers };
+                                persistSubstitutions();
+
+                                showToast('✅ Substitution plan reset successfully', 3000, 'success');
+                                renderSubstitutionView(activeDay, absentTeachers);
+
+                        } catch (error) {
+                                console.error('Error resetting substitution plan:', error);
+                                showToast('❌ Failed to reset substitution plan', 3000, 'error');
+                        }
+                }
 
 		async function handleShareScreenshot() {
 			try {
@@ -4358,15 +4507,19 @@
 					throw new Error('Failed to parse timetable data properly');
 				}
 				
-				// Initialize substitutions structure
-				state.allData.days.forEach(day => {
-					if (!state.substitutions[day]) {
-						state.substitutions[day] = { plan: {}, absentTeachers: [] };
-					}
-				});
-				
-				// Render initial view
-				switchView('Dashboard');
+                                // Initialize substitutions structure
+                                state.allData.days.forEach(day => {
+                                        if (!state.substitutions[day]) {
+                                                state.substitutions[day] = { plan: {}, absentTeachers: [] };
+                                        }
+                                });
+
+                                // Restore persisted substitution data and preferred view
+                                hydrateSubstitutionsFromStorage();
+                                const persistedView = loadPersistedView();
+
+                                // Render initial view
+                                switchView(persistedView || state.currentView || 'Dashboard');
 				
 				// Set up toast style
 				const style = document.createElement('style');
